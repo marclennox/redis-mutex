@@ -1,10 +1,12 @@
 require 'spec_helper'
 
-SHORT_MUTEX_OPTIONS = { :block => 0.1, :sleep => 0.02 }
+require 'redis-namespace'
+
+SHORT_MUTEX_OPTIONS = {:block => 0.1, :sleep => 0.02}
 
 class C
   include Redis::Mutex::Macro
-  auto_mutex :run_singularly, :block => 0, :after_failure => lambda {|id| return "failure: #{id}" }
+  auto_mutex :run_singularly, :block => 0, :after_failure => lambda { |id| return "failure: #{id}" }
 
   def run_singularly(id)
     sleep 0.1
@@ -14,12 +16,11 @@ end
 
 describe Redis::Mutex do
   before do
-    Redis::Classy.flushdb
+    Redis::Namespace.new(:mutex, redis: Redis.new).flushdb
   end
 
   after :all do
-    Redis::Classy.flushdb
-    Redis::Classy.quit
+    Redis::Namespace.new(:mutex, redis: Redis.new).flushdb
   end
 
   it 'locks the universe' do
@@ -34,17 +35,17 @@ describe Redis::Mutex do
     mutex1 = Redis::Mutex.new(:test_lock, SHORT_MUTEX_OPTIONS)
 
     mutex2 = Redis::Mutex.new(:test_lock, SHORT_MUTEX_OPTIONS)
-    mutex2.lock.should be_true    # mutex2 beats us to it
+    mutex2.lock.should be_true # mutex2 beats us to it
 
-    mutex1.lock.should be_false   # fail
+    mutex1.lock.should be_false # fail
   end
 
   it 'unlocks only once' do
     mutex = Redis::Mutex.new(:test_lock, SHORT_MUTEX_OPTIONS)
     mutex.lock.should be_true
 
-    mutex.unlock.should be_true   # successfully released the lock
-    mutex.unlock.should be_false  # the lock no longer exists
+    mutex.unlock.should be_true # successfully released the lock
+    mutex.unlock.should be_false # the lock no longer exists
   end
 
   it 'prevents accidental unlock from outside' do
@@ -62,28 +63,27 @@ describe Redis::Mutex do
     mutex.with_lock do
       mutex.get.to_f.should be_within(1.0).of((start + expires_in).to_f)
     end
-    mutex.get.should be_nil   # key should have been cleaned up
+    mutex.get.should be_nil # key should have been cleaned up
   end
 
   it 'overwrites a lock when existing lock is expired' do
-    # stale lock from the far past
-    Redis::Mutex.set(:test_lock, Time.now - 60)
-
     mutex = Redis::Mutex.new(:test_lock)
+    # stale lock from the far past
+    mutex.set(Time.now - 60)
     mutex.lock.should be_true
   end
 
   it 'fails to unlock the key if it took too long past expiration' do
     mutex = Redis::Mutex.new(:test_lock, :expire => 0.1, :block => 0)
     mutex.lock.should be_true
-    sleep 0.2   # lock expired
+    sleep 0.2 # lock expired
 
     # someone overwrites the expired lock
     mutex2 = Redis::Mutex.new(:test_lock, :expire => 10, :block => 0)
     mutex2.lock.should be_true
 
     mutex.unlock
-    mutex.get.should_not be_nil   # lock should still be there
+    mutex.get.should_not be_nil # lock should still be there
   end
 
   it 'ensures unlocking when something goes wrong in the block' do
@@ -152,9 +152,9 @@ describe Redis::Mutex do
   end
 
   it 'sweeps expired locks' do
-    Redis::Mutex.set(:past, Time.now.to_f - 60)
-    Redis::Mutex.set(:present, Time.now.to_f)
-    Redis::Mutex.set(:future, Time.now.to_f + 60)
+    Redis::Mutex.new(:past).set(Time.now.to_f - 60)
+    Redis::Mutex.new(:present).set(Time.now.to_f)
+    Redis::Mutex.new(:future).set(Time.now.to_f + 60)
     Redis::Mutex.keys.size.should == 3
     Redis::Mutex.sweep.should == 2
     Redis::Mutex.keys.size.should == 1
@@ -177,8 +177,7 @@ describe Redis::Mutex do
 
     def run(id)
       print "invoked worker #{id}...\n"
-      Redis::Classy.db.client.reconnect
-      mutex = Redis::Mutex.new(:test_lock, :expire => 1, :block => 10, :sleep => 0.01)
+      mutex = Redis::Mutex.new(:test_lock, :redis => Redis.new, :expire => 1, :block => 10, :sleep => 0.01)
       result = 0
       LOOP_NUM.times do |i|
         mutex.with_lock do

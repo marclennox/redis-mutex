@@ -14,7 +14,8 @@ Gem::Specification.new do |gem|
   gem.require_paths = ["lib"]
   gem.version       = '2.1.1' # retrieve this value by: Gem.loaded_specs['redis-mutex'].version.to_s
 
-  gem.add_runtime_dependency "redis-classy", "~> 1.2"
+  gem.add_runtime_dependency "redis"
+  gem.add_runtime_dependency "redis-namespace"
   gem.add_development_dependency "rspec"
   gem.add_development_dependency "bundler"
 

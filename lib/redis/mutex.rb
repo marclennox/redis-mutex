@@ -9,7 +9,7 @@ class Redis
   # :expire => Specify in seconds when the lock should forcibly be removed when something went wrong
   #            with the one who held the lock. (default: 10)
   #
-  class Mutex < Redis::Classy
+  class Mutex
     autoload :Macro, 'redis/mutex/macro'
 
     DEFAULT_EXPIRE = 10
@@ -17,8 +17,30 @@ class Redis
     UnlockError = Class.new(StandardError)
     AssertionError = Class.new(StandardError)
 
+    attr_reader :redis, :key
+
+    def self.namespace(object)
+      ns = case
+             when object.is_a?(Class)
+               object.name
+             when object.is_a?(String)
+               object
+             when object.is_a?(Symbol)
+               object
+             else
+               object.class.name
+           end
+      ns.gsub!('::', ':')
+      ns.gsub!(/([A-Z\d]+)([A-Z][a-z])/, '\1_\2')
+      ns.gsub!(/([a-z\d])([A-Z])/, '\1_\2')
+      ns.tr!("-", "_")
+      ns.downcase!
+      ns
+    end
+
     def initialize(object, options={})
-      super(object.is_a?(String) || object.is_a?(Symbol) ? object : "#{object.class.name}:#{object.id}")
+      @key = self.class.namespace(object)
+      @redis = Redis::Namespace.new(:mutex, :redis => (options[:redis] || Redis.new))
       @block = options[:block] || 1
       @sleep = options[:sleep] || 0.1
       @expire = options[:expire] || DEFAULT_EXPIRE
@@ -94,12 +116,38 @@ class Redis
       unlock(force) or raise UnlockError, "failed to release lock #{key.inspect}"
     end
 
+    def get
+      @redis.get(key)
+    end
+
+    def set(value)
+      @redis.set(key, value)
+    end
+
+    def getset(value)
+      @redis.getset(key, value)
+    end
+
+    def setnx(value)
+      @redis.setnx(key, value)
+    end
+
+    def del
+      @redis.del(key)
+    end
+
     class << self
-      def sweep
-        return 0 if (all_keys = keys).empty?
+
+      def keys(options={})
+        Redis::Namespace.new(:mutex, options[:redis] || Redis.new).keys
+      end
+
+      def sweep(options={})
+        redis = Redis::Namespace.new(:mutex, options[:redis] || Redis.new)
+        return 0 if (all_keys = self.keys(options)).empty?
 
         now = Time.now.to_f
-        values = mget(*all_keys)
+        values = redis.mget(*all_keys)
 
         expired_keys = all_keys.zip(values).select do |key, time|
           time && time.to_f <= now
@@ -107,7 +155,7 @@ class Redis
 
         expired_keys.each do |key, _|
           # Make extra sure that anyone haven't extended the lock
-          del(key) if getset(key, now + DEFAULT_EXPIRE).to_f <= now
+          redis.del(key) if redis.getset(key, now + DEFAULT_EXPIRE).to_f <= now
         end
 
         expired_keys.size
